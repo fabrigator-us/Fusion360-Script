@@ -6,15 +6,16 @@ Uses the official ConfigurationTopTable API to iterate every row
 root component as an STL to a folder you choose via dialog.
 
 HOW TO USE:
-  1. Open your Fusion 360 configured design file.
-  2. Go to Tools > Add-Ins > Scripts and Add-Ins (Shift+S).
-  3. Click the green "+" next to "My Scripts", point it at this file.
-  4. Click "Run".
-  5. Pick an output folder when the dialog appears.
-  6. STLs are saved as  <RowName>.stl  in that folder.
+1. Open your Fusion 360 configured design file.
+2. Go to Tools > Add-Ins > Scripts and Add-Ins (Shift+S).
+3. Click the green "+" next to "My Scripts", point it at this file.
+4. Click "Run".
+5. Enter an optional filename prefix when prompted (leave blank for none).
+6. Pick an output folder when the dialog appears.
+7. STLs are saved as <Prefix><RowName>.stl in that folder.
 
 API reference:
-  https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/Configurations_UM.htm
+https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/Configurations_UM.htm
 """
 
 import adsk.core
@@ -34,7 +35,21 @@ def run(context):
             ui.messageBox("Please open a Fusion design first.")
             return
 
-        # ── Check this is actually a configured design ────────────────────
+        # ── Prompt for an optional filename prefix ────────────────────────────
+        prefix_result, cancelled = ui.inputBox(
+            "Enter a filename prefix for exported STLs (leave blank for none):",
+            "Filename Prefix",
+            ""
+        )
+        if cancelled:
+            ui.messageBox("Export cancelled.")
+            return
+
+        # Sanitize the prefix so it's safe to use in a filename.
+        # A trailing underscore is added so filenames come out as "PREFIX_Name.stl".
+        prefix = _safe_filename(prefix_result.strip()) + "_" if prefix_result.strip() else ""
+
+        # ── Check this is actually a configured design ────────────────────────
         if not design.isConfiguredDesign:
             ui.messageBox(
                 "This design has no configuration table.\n"
@@ -44,11 +59,12 @@ def run(context):
             folder_dialog.title = "Select Output Folder for STL Files"
             if folder_dialog.showDialog() != adsk.core.DialogResults.DialogOK:
                 return
-            _export_stl(design, folder_dialog.folder,
-                        _safe_filename(design.rootComponent.name or "export"))
+
+            base_name = prefix + _safe_filename(design.rootComponent.name or "export")
+            _export_stl(design, folder_dialog.folder, base_name)
             return
 
-        # ── Choose output folder ──────────────────────────────────────────
+        # ── Choose output folder ──────────────────────────────────────────────
         folder_dialog = ui.createFolderDialog()
         folder_dialog.title = "Select Output Folder for STL Files"
         if folder_dialog.showDialog() != adsk.core.DialogResults.DialogOK:
@@ -57,13 +73,7 @@ def run(context):
 
         output_folder = folder_dialog.folder
 
-        # ── Access the top configuration table ───────────────────────────
-        # design.configurationTopTable  ->  ConfigurationTopTable
-        # topTable.rows                 ->  ConfigurationRows collection
-        # topTable.rows.count           ->  number of configurations
-        # topTable.rows.item(i)         ->  ConfigurationRow
-        # row.name                      ->  configuration name
-        # row.activate()                ->  make this configuration active
+        # ── Access the top configuration table ───────────────────────────────
         topTable: adsk.fusion.ConfigurationTopTable = design.configurationTopTable
         rows: adsk.fusion.ConfigurationRows = topTable.rows
         total = rows.count
@@ -78,31 +88,34 @@ def run(context):
         for i in range(total):
             row: adsk.fusion.ConfigurationRow = rows.item(i)
             cfg_name = row.name
-            safe_name = _safe_filename(cfg_name)
+            safe_name = prefix + _safe_filename(cfg_name)
 
             try:
                 row.activate()
                 adsk.doEvents()  # let Fusion update the model
-
                 _export_stl(design, output_folder, safe_name)
                 exported.append(cfg_name)
             except Exception as e:
                 failed.append(f"{cfg_name}: {e}")
 
-        # ── Summary ───────────────────────────────────────────────────────
+        # ── Summary ───────────────────────────────────────────────────────────
+        prefix_display = f'"{prefix}"' if prefix else "(none)"
         lines = [
             "Export complete!",
-            f"Folder: {output_folder}",
+            f"Folder:  {output_folder}",
+            f"Prefix:  {prefix_display}",
             "",
             f"Exported ({len(exported)}/{total}):",
         ]
         for name in exported:
-            lines.append(f"  v  {name}")
+            file_label = f"{prefix}{name}" if prefix else name
+            lines.append(f"  ✓ {file_label}.stl")
+
         if failed:
             lines.append("")
             lines.append(f"Failed ({len(failed)}):")
             for f in failed:
-                lines.append(f"  x  {f}")
+                lines.append(f"  ✗ {f}")
 
         ui.messageBox("\n".join(lines))
 
